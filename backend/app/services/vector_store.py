@@ -53,8 +53,9 @@ class VectorStoreService:
         try:
             self.collection = self.client.get_collection(name=collection_name)
             logger.info(f"Loaded existing collection: {collection_name}")
-        except ValueError:
+        except Exception as e:
             # Collection doesn't exist, create it
+            logger.info(f"Collection not found ({e}), creating new collection: {collection_name}")
             self.collection = self.client.create_collection(
                 name=collection_name,
                 metadata={"description": "Excel document embeddings for semantic search"}
