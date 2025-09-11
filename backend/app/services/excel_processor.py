@@ -8,8 +8,11 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 import tempfile
+import warnings
 import weakref
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import datetime
@@ -23,8 +26,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from openpyxl import load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
+from scipy import stats
 
 logger = logging.getLogger(__name__)
+
+# Suppress warnings for cleaner logs
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
 
 # Global thread pool for CPU-intensive operations
 _thread_pool: Optional[ThreadPoolExecutor] = None
@@ -247,14 +255,22 @@ class MemoryEfficientDataFrame:
 
 
 class OptimizedExcelProcessor:
-    """Optimized service for processing Excel files with memory-efficient strategies.
+    """Unified Excel processor combining performance optimization with advanced analysis.
     
     Features:
-    - Memory-efficient chunked processing for large files
+    - Memory-efficient chunked processing for large files (up to 500MB)
+    - Advanced data quality assessment and pattern detection
+    - Relationship analysis and correlation detection
+    - Configurable analysis modes (basic, comprehensive, auto)
     - Parallel processing where applicable
     - Progress tracking for long operations
     - Smart caching with memory management
     - Lazy loading and streaming capabilities
+    
+    Analysis Modes:
+    - 'basic': Fast processing with essential metadata only
+    - 'comprehensive': Full analysis with quality assessment and patterns
+    - 'auto': Adaptive mode based on file size and system resources
     """
 
     def __init__(self, 
@@ -262,15 +278,17 @@ class OptimizedExcelProcessor:
                  max_file_size_mb: int = 500,  # Increased limit
                  chunk_size: int = 10000,
                  max_cache_size_mb: int = 200,
-                 enable_parallel_processing: bool = True):
-        """Initialize the optimized Excel processor.
+                 enable_parallel_processing: bool = True,
+                 analysis_mode: str = "auto"):
+        """Initialize the unified Excel processor.
         
         Args:
             data_directory: Directory containing Excel files
-            max_file_size_mb: Maximum file size limit (increased from 100MB)
+            max_file_size_mb: Maximum file size limit (up to 500MB)
             chunk_size: Default chunk size for processing large files
             max_cache_size_mb: Maximum cache size in MB
             enable_parallel_processing: Enable parallel processing
+            analysis_mode: Analysis depth ('basic', 'comprehensive', 'auto')
         """
         self.data_directory = Path(data_directory)
         self.data_directory.mkdir(parents=True, exist_ok=True)
@@ -281,6 +299,17 @@ class OptimizedExcelProcessor:
         self.chunk_size = chunk_size
         self.max_cache_size_mb = max_cache_size_mb
         self.enable_parallel_processing = enable_parallel_processing
+        self.analysis_mode = analysis_mode
+        
+        # Pattern matchers for enhanced analysis
+        self.email_pattern = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
+        self.phone_pattern = re.compile(
+            r"(\+?\d{1,4}[\s-]?)?\(?\d{3}\)?[\s-]?\d{3}[\s-]?\d{4}|^\d{3}-\d{4}$"
+        )
+        self.url_pattern = re.compile(
+            r"https?://(?:[-\w.])+(?:[:\d]+)?(?:/(?:[\w/_.])*(?:\?(?:[\w&=%.])*)?(?:#(?:[\w.])*)?)?"
+        )
+        self.currency_pattern = re.compile(r"[$€£¥]\s*\d+(?:[,.]?\d+)*|\d+(?:[,.]?\d+)*\s*[$€£¥]")
         
         # Enhanced caching with memory management
         self._file_cache = {}
@@ -428,13 +457,15 @@ class OptimizedExcelProcessor:
     async def extract_sheet_metadata_async(self, 
                                           df: pd.DataFrame, 
                                           sheet_name: str,
-                                          progress: Optional[ProcessingProgress] = None) -> Dict[str, Any]:
+                                          progress: Optional[ProcessingProgress] = None,
+                                          analysis_mode: str = "basic") -> Dict[str, Any]:
         """Extract metadata from a DataFrame asynchronously with progress tracking.
         
         Args:
             df: Pandas DataFrame
             sheet_name: Name of the Excel sheet
             progress: Optional progress tracker
+            analysis_mode: Analysis depth ('basic', 'moderate', 'comprehensive')
             
         Returns:
             Dictionary with sheet metadata
@@ -460,7 +491,7 @@ class OptimizedExcelProcessor:
         if self.enable_parallel_processing and len(df.columns) > 10:
             # Process columns in parallel
             async def process_column(col):
-                return await asyncio.to_thread(self._analyze_column, df[col], sample_df[col], str(col), num_rows)
+                return await asyncio.to_thread(self._analyze_column, df[col], sample_df[col], str(col), num_rows, analysis_mode)
             
             # Process columns in batches to control memory usage
             batch_size = 20
@@ -482,7 +513,7 @@ class OptimizedExcelProcessor:
             for col in df.columns:
                 try:
                     col_info = await asyncio.to_thread(
-                        self._analyze_column, df[col], sample_df[col], str(col), num_rows
+                        self._analyze_column, df[col], sample_df[col], str(col), num_rows, analysis_mode
                     )
                     columns_info.append(col_info)
                 except Exception as e:
@@ -505,8 +536,30 @@ class OptimizedExcelProcessor:
             "sample_size": len(sample_df) if num_rows > 10000 else num_rows
         }
     
-    def _analyze_column(self, full_col: pd.Series, sample_col: pd.Series, col_name: str, total_rows: int) -> Dict[str, Any]:
-        """Analyze a single column efficiently."""
+    def extract_sheet_metadata(self, df: pd.DataFrame, sheet_name: str, analysis_mode: str = "basic") -> Dict[str, Any]:
+        """Synchronous wrapper for extract_sheet_metadata_async for backward compatibility."""
+        import asyncio
+        try:
+            # Try to get existing event loop
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # If we're in an async context, we need to run in a thread
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(
+                        asyncio.run, 
+                        self.extract_sheet_metadata_async(df, sheet_name, None, analysis_mode)
+                    )
+                    return future.result()
+            else:
+                # We can run directly
+                return loop.run_until_complete(self.extract_sheet_metadata_async(df, sheet_name, None, analysis_mode))
+        except RuntimeError:
+            # No event loop, create new one
+            return asyncio.run(self.extract_sheet_metadata_async(df, sheet_name, None, analysis_mode))
+    
+    def _analyze_column(self, full_col: pd.Series, sample_col: pd.Series, col_name: str, total_rows: int, analysis_mode: str = "basic") -> Dict[str, Any]:
+        """Analyze a single column efficiently with configurable depth."""
         col_data = sample_col.dropna()
         
         if len(col_data) == 0:
@@ -516,11 +569,21 @@ class OptimizedExcelProcessor:
                 "dtype": str(full_col.dtype),
                 "non_null_count": 0,
                 "null_count": total_rows,
-                "stats": {}
+                "stats": {},
+                "patterns": {} if analysis_mode != "basic" else None
             }
         
         dtype = str(full_col.dtype)
         non_null_count = int(full_col.count())
+        
+        # Basic column info
+        column_info = {
+            "name": col_name,
+            "dtype": dtype,
+            "non_null_count": non_null_count,
+            "null_count": int(total_rows - non_null_count),
+            "null_percentage": round((total_rows - non_null_count) / total_rows * 100, 2) if total_rows > 0 else 0,
+        }
         
         # Detect data types more specifically
         if pd.api.types.is_numeric_dtype(full_col):
@@ -533,6 +596,22 @@ class OptimizedExcelProcessor:
                 "std": float(col_data.std()) if not pd.isna(col_data.std()) else None,
                 "median": float(col_data.median()) if not pd.isna(col_data.median()) else None
             }
+            
+            # Enhanced statistics for comprehensive mode
+            if analysis_mode == "comprehensive" and len(col_data) > 1:
+                try:
+                    stats.update({
+                        "quartiles": {
+                            "q1": float(col_data.quantile(0.25)),
+                            "q3": float(col_data.quantile(0.75))
+                        },
+                        "skewness": float(stats.skew(col_data)) if len(col_data) > 1 else 0,
+                        "kurtosis": float(stats.kurtosis(col_data)) if len(col_data) > 1 else 0,
+                        "variance": float(col_data.var())
+                    })
+                except Exception as e:
+                    logger.warning(f"Enhanced numeric stats failed for {col_name}: {e}")
+                    
         elif pd.api.types.is_datetime64_any_dtype(full_col):
             data_type = "datetime"
             stats = {
@@ -540,6 +619,14 @@ class OptimizedExcelProcessor:
                 "max": str(col_data.max()),
                 "date_range_days": (col_data.max() - col_data.min()).days if len(col_data) > 1 else 0
             }
+            
+            # Enhanced datetime analysis for comprehensive mode
+            if analysis_mode == "comprehensive":
+                try:
+                    stats["frequency_analysis"] = self._analyze_date_frequency(col_data)
+                except Exception as e:
+                    logger.warning(f"Date frequency analysis failed for {col_name}: {e}")
+                    
         else:
             data_type = "text"
             unique_count = col_data.nunique()
@@ -551,15 +638,21 @@ class OptimizedExcelProcessor:
                 "avg_length": round(col_data.astype(str).str.len().mean(), 2) if len(col_data) > 0 else 0
             }
         
-        return {
-            "name": col_name,
+        column_info.update({
             "data_type": data_type,
-            "dtype": dtype,
-            "non_null_count": non_null_count,
-            "null_count": int(total_rows - non_null_count),
-            "null_percentage": round((total_rows - non_null_count) / total_rows * 100, 2) if total_rows > 0 else 0,
             "stats": stats
-        }
+        })
+        
+        # Add pattern detection for enhanced modes
+        if analysis_mode in ["comprehensive", "moderate"]:
+            try:
+                patterns = self.detect_data_patterns(sample_col)
+                column_info["patterns"] = patterns
+            except Exception as e:
+                logger.warning(f"Pattern detection failed for {col_name}: {e}")
+                column_info["patterns"] = {}
+        
+        return column_info
 
     async def create_searchable_text_async(self, 
                                           df: pd.DataFrame, 
@@ -628,6 +721,28 @@ class OptimizedExcelProcessor:
                 text_chunks.append(chunk_text)
         
         return text_chunks
+    
+    def create_searchable_text(self, df: pd.DataFrame, sheet_name: str, metadata: Dict[str, Any]) -> List[str]:
+        """Synchronous wrapper for create_searchable_text_async for backward compatibility."""
+        import asyncio
+        try:
+            # Try to get existing event loop
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # If we're in an async context, we need to run in a thread
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(
+                        asyncio.run, 
+                        self.create_searchable_text_async(df, sheet_name, metadata, None)
+                    )
+                    return future.result()
+            else:
+                # We can run directly
+                return loop.run_until_complete(self.create_searchable_text_async(df, sheet_name, metadata, None))
+        except RuntimeError:
+            # No event loop, create new one
+            return asyncio.run(self.create_searchable_text_async(df, sheet_name, metadata, None))
 
     @lru_cache(maxsize=32)
     def process_excel_file(self, file_path: Union[str, Path]) -> Dict[str, Any]:
@@ -646,7 +761,10 @@ class OptimizedExcelProcessor:
             file_info = self.validate_excel_file(file_path)
             file_hash = self.get_file_hash(file_path)
             
-            logger.info(f"Processing Excel file: {file_path.name}")
+            # Determine analysis mode based on file size
+            analysis_mode = self._determine_analysis_mode(file_info["file_size_mb"])
+            
+            logger.info(f"Processing Excel file: {file_path.name} (mode: {analysis_mode})")
             
             # Read all sheets
             try:
@@ -686,7 +804,7 @@ class OptimizedExcelProcessor:
                     continue
                 
                 # Extract metadata
-                metadata = self.extract_sheet_metadata(df, sheet_name)
+                metadata = self.extract_sheet_metadata(df, sheet_name, analysis_mode)
                 
                 # Create searchable text
                 text_chunks = self.create_searchable_text(df, sheet_name, metadata)
@@ -714,7 +832,15 @@ class OptimizedExcelProcessor:
                 "total_columns": len(total_columns),
                 "sheets": sheets_data,
                 "all_text_chunks": all_text_chunks,
-                "processed_at": datetime.now()
+                "processed_at": datetime.now(),
+                "analysis_mode": analysis_mode,
+                "processing_info": {
+                    "analysis_mode": analysis_mode,
+                    "enhanced_features_enabled": analysis_mode in ["comprehensive", "moderate"],
+                    "pattern_detection_enabled": analysis_mode in ["comprehensive", "moderate"],
+                    "performance_optimized": True,
+                    "processing_version": "2.0-unified"
+                }
             }
             
             logger.info(f"Successfully processed {file_path.name}: "
@@ -828,6 +954,319 @@ class OptimizedExcelProcessor:
             "average_sheets_per_file": round(total_sheets / total_files, 2),
             "average_rows_per_file": round(total_rows / total_files, 2)
         }
+
+    def _determine_analysis_mode(self, file_size_mb: float) -> str:
+        """Determine analysis mode based on file size and configuration."""
+        if self.analysis_mode == "auto":
+            if file_size_mb > 100:  # > 100MB files get basic analysis
+                return "basic"
+            elif file_size_mb > 20:  # 20-100MB files get moderate analysis
+                return "moderate"
+            else:  # < 20MB files get comprehensive analysis
+                return "comprehensive"
+        return self.analysis_mode
+
+    def detect_data_patterns(self, series: pd.Series) -> Dict[str, Any]:
+        """Detect patterns in data series for enhanced metadata."""
+        patterns = {
+            "email_count": 0,
+            "phone_count": 0,
+            "url_count": 0,
+            "currency_count": 0,
+            "date_patterns": [],
+            "numeric_patterns": {},
+            "text_patterns": {},
+        }
+
+        if series.dtype == "object" or pd.api.types.is_string_dtype(series):
+            string_data = series.astype(str).dropna()
+
+            # Pattern matching
+            patterns["email_count"] = sum(1 for x in string_data if self.email_pattern.search(x))
+            patterns["phone_count"] = sum(1 for x in string_data if self.phone_pattern.search(x))
+            patterns["url_count"] = sum(1 for x in string_data if self.url_pattern.search(x))
+            patterns["currency_count"] = sum(
+                1 for x in string_data if self.currency_pattern.search(x)
+            )
+
+            # Text patterns
+            if len(string_data) > 0:
+                lengths = [len(str(x)) for x in string_data if str(x) != "nan"]
+                if lengths:
+                    patterns["text_patterns"] = {
+                        "avg_length": round(np.mean(lengths), 2),
+                        "min_length": min(lengths),
+                        "max_length": max(lengths),
+                        "common_prefixes": self._find_common_prefixes(string_data),
+                        "common_suffixes": self._find_common_suffixes(string_data),
+                        "encoding_issues": self._detect_encoding_issues(string_data),
+                    }
+
+        elif pd.api.types.is_numeric_dtype(series):
+            numeric_data = series.dropna()
+            if len(numeric_data) > 1:
+                patterns["numeric_patterns"] = {
+                    "is_integer": all(float(x).is_integer() for x in numeric_data if pd.notna(x)),
+                    "has_negative": any(x < 0 for x in numeric_data),
+                    "has_zero": any(x == 0 for x in numeric_data),
+                    "decimal_places": self._analyze_decimal_places(numeric_data),
+                    "distribution_type": self._detect_distribution(numeric_data),
+                    "outlier_detection": self._advanced_outlier_detection(numeric_data),
+                    "seasonality": (
+                        self._detect_seasonality(numeric_data) if len(numeric_data) >= 12 else None
+                    ),
+                }
+
+        return patterns
+
+    def _find_common_prefixes(self, string_data: pd.Series, min_length: int = 2) -> List[str]:
+        """Find common prefixes in string data."""
+        if len(string_data) < 2:
+            return []
+
+        prefixes = Counter()
+        for text in string_data[:1000]:  # Limit for performance
+            text = str(text)
+            for i in range(min_length, min(len(text) + 1, 8)):
+                prefixes[text[:i]] += 1
+
+        threshold = max(2, len(string_data) * 0.1)
+        return [prefix for prefix, count in prefixes.most_common(5) if count >= threshold]
+
+    def _find_common_suffixes(self, string_data: pd.Series, min_length: int = 2) -> List[str]:
+        """Find common suffixes in string data."""
+        if len(string_data) < 2:
+            return []
+
+        suffixes = Counter()
+        for text in string_data[:1000]:  # Limit for performance
+            text = str(text)
+            for i in range(min_length, min(len(text) + 1, 8)):
+                suffixes[text[-i:]] += 1
+
+        threshold = max(2, len(string_data) * 0.1)
+        return [suffix for suffix, count in suffixes.most_common(5) if count >= threshold]
+
+    def _detect_encoding_issues(self, string_data: pd.Series) -> Dict[str, Any]:
+        """Detect potential encoding issues in text data."""
+        encoding_issues = {"non_ascii_count": 0, "control_char_count": 0, "suspicious_chars": []}
+
+        suspicious_chars = Counter()
+        for text in string_data[:100]:  # Sample for performance
+            text = str(text)
+            encoding_issues["non_ascii_count"] += sum(1 for char in text if ord(char) > 127)
+            encoding_issues["control_char_count"] += sum(
+                1 for char in text if ord(char) < 32 and char not in ["\t", "\n", "\r"]
+            )
+
+            # Look for common encoding error patterns
+            for char in text:
+                if char in ["�", "\ufffd", "\x00"]:
+                    suspicious_chars[char] += 1
+
+        encoding_issues["suspicious_chars"] = dict(suspicious_chars.most_common(5))
+        return encoding_issues
+
+    def _analyze_decimal_places(self, numeric_data: pd.Series) -> Dict[str, Any]:
+        """Analyze decimal places in numeric data."""
+        decimal_counts = []
+        for val in numeric_data:
+            if pd.notna(val):
+                if isinstance(val, float):
+                    decimal_str = f"{val:.10f}".rstrip("0")
+                    if "." in decimal_str:
+                        decimal_places = len(decimal_str.split(".")[1])
+                    else:
+                        decimal_places = 0
+                else:
+                    decimal_places = 0
+                decimal_counts.append(decimal_places)
+
+        if decimal_counts:
+            return {
+                "max_decimal_places": max(decimal_counts),
+                "avg_decimal_places": round(np.mean(decimal_counts), 2),
+                "common_decimal_places": dict(Counter(decimal_counts).most_common(3)),
+                "precision_consistency": len(set(decimal_counts)) <= 2,
+            }
+        return {}
+
+    def _detect_distribution(self, numeric_data: pd.Series) -> Dict[str, Any]:
+        """Detect the likely distribution type of numeric data."""
+        if len(numeric_data) < 10:
+            return {"type": "insufficient_data", "confidence": 0.0}
+
+        try:
+            data_array = np.array(numeric_data)
+
+            # Basic statistics
+            skewness = float(stats.skew(data_array))
+            kurtosis = float(stats.kurtosis(data_array))
+
+            # Distribution tests
+            distribution_info = {
+                "skewness": round(skewness, 4),
+                "kurtosis": round(kurtosis, 4),
+                "type": "unknown",
+                "confidence": 0.0,
+            }
+
+            # Test for normality
+            if len(data_array) >= 20:
+                _, p_normal = stats.normaltest(data_array)
+                if p_normal > 0.05:
+                    distribution_info["type"] = "likely_normal"
+                    distribution_info["confidence"] = round(p_normal, 4)
+
+            # Basic distribution characteristics
+            if distribution_info["type"] == "unknown":
+                if abs(skewness) < 0.5:
+                    distribution_info["type"] = "approximately_symmetric"
+                elif skewness > 1:
+                    distribution_info["type"] = "right_skewed"
+                elif skewness < -1:
+                    distribution_info["type"] = "left_skewed"
+
+            return distribution_info
+
+        except Exception as e:
+            logger.warning(f"Distribution analysis failed: {e}")
+            return {"type": "analysis_failed", "confidence": 0.0}
+
+    def _advanced_outlier_detection(self, numeric_data: pd.Series) -> Dict[str, Any]:
+        """Advanced outlier detection using multiple methods."""
+        if len(numeric_data) < 4:
+            return {"method": "insufficient_data", "outliers": [], "outlier_count": 0}
+
+        data_array = np.array(numeric_data)
+        outlier_info = {
+            "iqr_outliers": [],
+            "z_score_outliers": [],
+            "modified_z_outliers": [],
+            "total_outliers": 0,
+            "outlier_percentage": 0.0,
+        }
+
+        try:
+            # IQR method
+            Q1 = np.percentile(data_array, 25)
+            Q3 = np.percentile(data_array, 75)
+            IQR = Q3 - Q1
+
+            lower_bound = Q1 - 1.5 * IQR
+            upper_bound = Q3 + 1.5 * IQR
+            iqr_outliers = data_array[(data_array < lower_bound) | (data_array > upper_bound)]
+            outlier_info["iqr_outliers"] = iqr_outliers.tolist()
+
+            # Z-score method
+            if len(data_array) > 1:
+                z_scores = np.abs(stats.zscore(data_array))
+                z_outliers = data_array[z_scores > 3]
+                outlier_info["z_score_outliers"] = z_outliers.tolist()
+
+                # Modified Z-score method
+                median = np.median(data_array)
+                mad = np.median(np.abs(data_array - median))
+                if mad != 0:
+                    modified_z_scores = 0.6745 * (data_array - median) / mad
+                    modified_z_outliers = data_array[np.abs(modified_z_scores) > 3.5]
+                    outlier_info["modified_z_outliers"] = modified_z_outliers.tolist()
+
+            # Combined outlier count
+            all_outliers = set(
+                outlier_info["iqr_outliers"]
+                + outlier_info["z_score_outliers"]
+                + outlier_info["modified_z_outliers"]
+            )
+
+            outlier_info["total_outliers"] = len(all_outliers)
+            outlier_info["outlier_percentage"] = round(
+                (len(all_outliers) / len(data_array)) * 100, 2
+            )
+
+        except Exception as e:
+            logger.warning(f"Outlier detection failed: {e}")
+
+        return outlier_info
+
+    def _detect_seasonality(self, numeric_data: pd.Series) -> Dict[str, Any]:
+        """Detect potential seasonality in numeric time series data."""
+        if len(numeric_data) < 12:
+            return {"has_seasonality": False, "confidence": 0.0}
+
+        try:
+            # Simple autocorrelation test for common seasonal patterns
+            data_array = np.array(numeric_data)
+
+            # Test for monthly seasonality (lag 12)
+            if len(data_array) >= 24:
+                monthly_corr = np.corrcoef(data_array[:-12], data_array[12:])[0, 1]
+
+                # Test for quarterly seasonality (lag 4)
+                quarterly_corr = 0
+                if len(data_array) >= 8:
+                    quarterly_corr = np.corrcoef(data_array[:-4], data_array[4:])[0, 1]
+
+                return {
+                    "has_seasonality": abs(monthly_corr) > 0.5 or abs(quarterly_corr) > 0.5,
+                    "monthly_correlation": (
+                        round(monthly_corr, 4) if not np.isnan(monthly_corr) else 0
+                    ),
+                    "quarterly_correlation": (
+                        round(quarterly_corr, 4) if not np.isnan(quarterly_corr) else 0
+                    ),
+                    "confidence": (
+                        max(abs(monthly_corr), abs(quarterly_corr))
+                        if not np.isnan(monthly_corr)
+                        else 0
+                    ),
+                }
+
+        except Exception:
+            pass
+
+        return {"has_seasonality": False, "confidence": 0.0}
+
+    def _analyze_date_frequency(self, date_series: pd.Series) -> Dict[str, Any]:
+        """Analyze frequency patterns in datetime data."""
+        if len(date_series) < 2:
+            return {"frequency": "unknown", "intervals": []}
+
+        try:
+            sorted_dates = date_series.sort_values()
+            intervals = sorted_dates.diff().dropna()
+
+            # Most common interval
+            interval_counts = intervals.value_counts()
+            most_common_interval = interval_counts.index[0] if len(interval_counts) > 0 else None
+
+            frequency_info = {
+                "most_common_interval": str(most_common_interval),
+                "interval_consistency": len(interval_counts) == 1,
+                "total_intervals": len(intervals),
+                "unique_intervals": len(interval_counts),
+            }
+
+            # Detect common patterns
+            if most_common_interval:
+                days = most_common_interval.days
+                if days == 1:
+                    frequency_info["frequency"] = "daily"
+                elif days == 7:
+                    frequency_info["frequency"] = "weekly"
+                elif 28 <= days <= 31:
+                    frequency_info["frequency"] = "monthly"
+                elif 90 <= days <= 92:
+                    frequency_info["frequency"] = "quarterly"
+                elif 365 <= days <= 366:
+                    frequency_info["frequency"] = "yearly"
+                else:
+                    frequency_info["frequency"] = "irregular"
+
+            return frequency_info
+
+        except Exception:
+            return {"frequency": "analysis_failed", "intervals": []}
 
 
 # Backward compatibility alias
