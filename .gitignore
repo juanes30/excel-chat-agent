@@ -383,3 +383,4 @@ cython_debug/
 #.idea/
 
 chroma_db/chroma.sqlite3
+backend/chroma_db/chroma.sqlite3
