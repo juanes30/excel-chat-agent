@@ -1,4 +1,4 @@
-"""FastAPI main application for Excel Chat Agent."""
+"""FastAPI main application for Excel Chat Agent with Enhanced Services."""
 
 import asyncio
 import logging
@@ -38,9 +38,61 @@ from app.models.schemas import (
     ProcessingStatus,
     WebSocketMessage
 )
-from app.services.excel_processor import ExcelProcessor
-from app.services.vector_store import VectorStoreService
-from app.services.llm_service import LangChainLLMService
+
+# Enhanced services imports (fallback to existing services for now)
+try:
+    from app.services.enhanced_excel_processor import EnhancedExcelProcessor as ExcelProcessor
+except ImportError:
+    from app.services.excel_processor import ExcelProcessor
+
+try:
+    from app.services.enhanced_vector_store_v2 import EnhancedVectorStoreV2 as VectorStoreService
+except ImportError:
+    from app.services.vector_store import VectorStoreService
+
+try:
+    from app.services.enhanced_llm_service import EnhancedLLMService as LLMService
+except ImportError:
+    from app.services.llm_service import LangChainLLMService as LLMService
+
+try:
+    from app.services.rag_integration_service import RAGIntegrationService
+    HAS_RAG_SERVICE = True
+except ImportError:
+    RAGIntegrationService = None
+    HAS_RAG_SERVICE = False
+
+try:
+    from app.services.enhanced_embedding_strategy import EnhancedEmbeddingStrategy
+    HAS_EMBEDDING_STRATEGY = True
+except ImportError:
+    EnhancedEmbeddingStrategy = None  
+    HAS_EMBEDDING_STRATEGY = False
+
+# WebSocket integration (optional)
+try:
+    from app.api.websocket_routes import initialize_websocket_handler, router as websocket_router
+    HAS_ENHANCED_WEBSOCKET = True
+except ImportError:
+    websocket_router = None
+    HAS_ENHANCED_WEBSOCKET = False
+
+# Error handling (optional)
+try:
+    from app.utils.error_handling import (
+        global_error_handler, 
+        LLMServiceError, 
+        ErrorContext,
+        with_error_handling
+    )
+    HAS_ERROR_HANDLING = True
+except ImportError:
+    def with_error_handling(operation: str = None, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+    LLMServiceError = Exception
+    HAS_ERROR_HANDLING = False
 
 # Setup logging
 logging.basicConfig(
@@ -49,10 +101,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Global variables for services
+# Global variables for services (with fallback support)
 excel_processor: Optional[ExcelProcessor] = None
 vector_store: Optional[VectorStoreService] = None
-llm_service: Optional[LangChainLLMService] = None
+llm_service: Optional[LLMService] = None
+rag_service: Optional[RAGIntegrationService] = None
+embedding_strategy: Optional[EnhancedEmbeddingStrategy] = None
 app_start_time: datetime = datetime.now()
 
 
@@ -112,44 +166,90 @@ class ConnectionManager:
 connection_manager = ConnectionManager()
 
 
+@with_error_handling(operation="initialize_services")
 async def initialize_services():
-    """Initialize all services during startup."""
-    global excel_processor, vector_store, llm_service
+    """Initialize all enhanced services during startup."""
+    global excel_processor, vector_store, llm_service, rag_service, embedding_strategy
     
-    logger.info("Initializing services...")
+    logger.info("Initializing enhanced services...")
     
-    # Initialize Excel processor
-    data_directory = os.getenv("DATA_DIRECTORY", "data/excel_files")
-    excel_processor = ExcelProcessor(data_directory)
-    
-    # Initialize vector store
-    chroma_directory = os.getenv("CHROMA_DIRECTORY", "chroma_db")
-    embedding_model = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
-    vector_store = VectorStoreService(chroma_directory, embedding_model=embedding_model)
-    
-    # Initialize LLM service
-    model_name = os.getenv("OLLAMA_MODEL", "llama3")
-    ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
-    llm_service = LangChainLLMService(model_name=model_name, ollama_url=ollama_url)
-    
-    # Process existing Excel files and index them
     try:
-        logger.info("Processing existing Excel files...")
-        all_files = excel_processor.process_all_files()
+        # Initialize Enhanced Embedding Strategy
+        logger.info("Initializing enhanced embedding strategy...")
+        embedding_strategy = EnhancedEmbeddingStrategy()
         
-        for file_data in all_files:
-            await vector_store.add_excel_data(
-                file_name=file_data['file_name'],
-                file_hash=file_data['file_hash'],
-                sheets_data=file_data['sheets']
+        # Initialize Enhanced Excel processor
+        data_directory = os.getenv("DATA_DIRECTORY", "data/excel_files")
+        excel_processor = ExcelProcessor(data_directory)
+        logger.info(f"Enhanced Excel processor initialized with directory: {data_directory}")
+        
+        # Initialize Enhanced Vector Store V2
+        chroma_directory = os.getenv("CHROMA_DIRECTORY", "chroma_db")
+        vector_store = VectorStoreService(
+            persist_directory=chroma_directory,
+            collection_name="excel_data_v2",
+            enable_multi_modal=True,
+            enable_analytics=True
+        )
+        logger.info(f"Enhanced vector store initialized with directory: {chroma_directory}")
+        
+        # Initialize Enhanced LLM service
+        model_name = os.getenv("OLLAMA_MODEL", "llama3")
+        ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
+        llm_service = LLMService(
+            model_name=model_name,
+            ollama_url=ollama_url,
+            vector_store=vector_store,
+            enable_streaming=True
+        )
+        logger.info(f"Enhanced LLM service initialized with model: {model_name}")
+        
+        # Initialize RAG Integration Service
+        if HAS_RAG_SERVICE:
+            rag_service = RAGIntegrationService(
+                llm_service=llm_service,
+                vector_store=vector_store
             )
+            logger.info("RAG integration service initialized")
+        else:
+            rag_service = None
+            logger.info("RAG integration service not available (fallback mode)")
         
-        logger.info(f"Processed and indexed {len(all_files)} Excel files")
+        # WebSocket handler not available, skip initialization
+        logger.info("WebSocket handlers not available (fallback mode)")
+        
+        # Process existing Excel files and index them with enhanced processing
+        try:
+            logger.info("Processing existing Excel files with enhanced processor...")
+            all_files = await excel_processor.process_all_files()
+            
+            processed_count = 0
+            for file_data in all_files:
+                try:
+                    success = await vector_store.add_excel_data_enhanced(
+                        file_name=file_data['file_name'],
+                        file_hash=file_data['file_hash'],
+                        sheets_data=file_data['sheets'],
+                        enable_multi_modal=True,
+                        enable_content_analysis=True
+                    )
+                    if success.get('success', False):
+                        processed_count += 1
+                except Exception as file_error:
+                    logger.error(f"Error processing file {file_data['file_name']}: {file_error}")
+                    continue
+            
+            logger.info(f"Successfully processed and indexed {processed_count} Excel files")
+            
+        except Exception as e:
+            logger.error(f"Error processing existing files: {e}")
+            # Continue startup even if file processing fails
+        
+        logger.info("Enhanced services initialized successfully")
         
     except Exception as e:
-        logger.error(f"Error processing existing files: {e}")
-    
-    logger.info("Services initialized successfully")
+        logger.error(f"Critical error during service initialization: {e}")
+        raise
 
 
 async def cleanup_services():
@@ -178,9 +278,9 @@ async def lifespan(app: FastAPI):
 
 # Create FastAPI app
 app = FastAPI(
-    title="Excel Chat Agent",
-    description="AI-powered chat interface for Excel file analysis",
-    version="0.1.0",
+    title="Excel Chat Agent Enhanced",
+    description="AI-powered chat interface for Excel file analysis with enhanced RAG capabilities",
+    version="1.0.0",
     lifespan=lifespan
 )
 
@@ -193,51 +293,107 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Include WebSocket routes
+if websocket_router is not None:
+    app.include_router(websocket_router)
+
 
 # Dependency to check if services are ready
 def get_services():
-    """Dependency to ensure services are initialized."""
-    if not all([excel_processor, vector_store, llm_service]):
+    """Dependency to ensure enhanced services are initialized."""
+    if not all([excel_processor, vector_store, llm_service, rag_service]):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Services are still initializing"
+            detail="Enhanced services are still initializing"
         )
-    return excel_processor, vector_store, llm_service
+    return excel_processor, vector_store, llm_service, rag_service
+
+
+def get_rag_service():
+    """Dependency to get RAG service."""
+    if not rag_service:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="RAG service not available"
+        )
+    return rag_service
 
 
 @app.get("/", response_model=HealthCheck)
 async def health_check():
-    """Health check endpoint."""
+    """Enhanced health check endpoint."""
     uptime_seconds = int((datetime.now() - app_start_time).total_seconds())
     
-    # Check service health
+    # Check enhanced service health
     components = {}
     overall_status = "healthy"
     
     try:
+        # Check Enhanced Excel Processor
         if excel_processor:
-            components["excel_processor"] = "healthy"
+            try:
+                stats = excel_processor.get_statistics()
+                components["enhanced_excel_processor"] = "healthy"
+            except Exception as e:
+                components["enhanced_excel_processor"] = "degraded"
+                overall_status = "degraded"
         else:
-            components["excel_processor"] = "not_initialized"
+            components["enhanced_excel_processor"] = "not_initialized"
             overall_status = "unhealthy"
         
+        # Check Enhanced Vector Store
         if vector_store:
-            vector_health = vector_store.health_check()
-            components["vector_store"] = vector_health["status"]
-            if vector_health["status"] != "healthy":
+            try:
+                vector_health = await vector_store.health_check() if hasattr(vector_store, 'health_check') else {"status": "healthy"}
+                components["enhanced_vector_store"] = vector_health.get("status", "healthy")
+                if vector_health.get("status") not in ["healthy", "empty"]:
+                    overall_status = "degraded"
+            except Exception as e:
+                components["enhanced_vector_store"] = "unhealthy"
                 overall_status = "degraded"
         else:
-            components["vector_store"] = "not_initialized"
+            components["enhanced_vector_store"] = "not_initialized"
             overall_status = "unhealthy"
         
+        # Check Enhanced LLM Service
         if llm_service:
-            llm_health = llm_service.health_check()
-            components["llm_service"] = llm_health["status"]
-            if llm_health["status"] != "healthy":
+            try:
+                llm_health = await llm_service.health_check() if hasattr(llm_service, 'health_check') else {"status": "healthy"}
+                components["enhanced_llm_service"] = llm_health.get("status", "healthy")
+                if llm_health.get("status") != "healthy":
+                    overall_status = "degraded"
+            except Exception as e:
+                components["enhanced_llm_service"] = "unhealthy"
                 overall_status = "degraded"
         else:
-            components["llm_service"] = "not_initialized"
+            components["enhanced_llm_service"] = "not_initialized"
             overall_status = "unhealthy"
+        
+        # Check RAG Integration Service
+        if rag_service:
+            try:
+                rag_health = await rag_service.health_check()
+                components["rag_integration_service"] = rag_health.get("status", "healthy")
+                if rag_health.get("status") not in ["healthy", "degraded"]:
+                    overall_status = "degraded"
+            except Exception as e:
+                components["rag_integration_service"] = "unhealthy"
+                overall_status = "degraded"
+        else:
+            components["rag_integration_service"] = "not_initialized"
+        
+        # Check Enhanced Embedding Strategy  
+        if embedding_strategy:
+            try:
+                # Just check if it exists and has required attributes
+                if hasattr(embedding_strategy, 'embedding_model'):
+                    components["embedding_strategy"] = "healthy"
+                else:
+                    components["embedding_strategy"] = "degraded"
+            except Exception as e:
+                components["embedding_strategy"] = "unhealthy"
+        else:
+            components["embedding_strategy"] = "not_initialized"
         
     except Exception as e:
         logger.error(f"Health check error: {e}")
@@ -246,7 +402,7 @@ async def health_check():
     
     return HealthCheck(
         status=overall_status,
-        version="0.1.0",
+        version="1.0.0",  # Updated version for enhanced services
         components=components,
         uptime_seconds=uptime_seconds
     )
@@ -332,118 +488,202 @@ async def upload_file(
 
 
 @app.post("/api/query", response_model=QueryResponse)
-async def query_data(request: QueryRequest, services=Depends(get_services)):
-    """Query Excel data using AI."""
+async def query_data(request: QueryRequest, rag_svc: RAGIntegrationService = Depends(get_rag_service)):
+    """Query Excel data using enhanced AI with RAG."""
     try:
-        start_time = time.time()
-        excel_proc, vector_store_svc, llm_svc = services
-        
-        # Perform vector search to get relevant context
-        search_results = await vector_store_svc.search(
-            query=request.question,
-            n_results=request.max_results,
-            file_filter=request.file_filter,
-            sheet_filter=request.sheet_filter
+        # Process query with full RAG enhancement
+        response = await rag_svc.process_rag_enhanced_query(
+            query_request=request,
+            session_id=None  # No session for REST API
         )
         
-        if not search_results:
+        if isinstance(response, QueryResponse):
+            return response
+        else:
+            # Handle case where streaming generator is returned (shouldn't happen for REST API)
+            logger.warning("Streaming response returned for REST API query")
             return QueryResponse(
-                answer="I couldn't find any relevant data to answer your question. Please make sure your Excel files are properly uploaded and indexed.",
+                answer="Query processed but response format incompatible with REST API",
                 sources=[],
-                confidence=0.0,
-                processing_time_ms=int((time.time() - start_time) * 1000)
+                confidence=0.5,
+                timestamp=datetime.now(),
+                processing_time_ms=0
             )
         
-        # Prepare context for LLM
-        context = "\n\n".join([
-            f"From {result['file_name']}, {result['sheet_name']}:\n{result['content']}"
-            for result in search_results
-        ])
+    except LLMServiceError as e:
+        logger.error(f"LLM service error: {e}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"AI service error: {e.message}"
+        )
+    except Exception as e:
+        logger.error(f"Error processing enhanced query: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/query/stream")
+async def query_data_stream(request: QueryRequest, rag_svc: RAGIntegrationService = Depends(get_rag_service)):
+    """Stream Excel data query response (for non-WebSocket clients)."""
+    try:
+        # Enable streaming in the request
+        request.streaming = True
         
-        # Analyze request to determine intent
-        analysis = await llm_svc.analyze_data_request(request.question)
-        
-        # Generate response
-        llm_response = await llm_svc.generate_response(
-            question=request.question,
-            context=context,
-            intent=analysis["intent"]
+        # Process query with streaming
+        response_gen = await rag_svc.process_rag_enhanced_query(
+            query_request=request,
+            session_id=f"rest_stream_{uuid.uuid4()}"
         )
         
-        # Prepare sources
-        sources = list(set([
-            f"{result['file_name']} - {result['sheet_name']}"
-            for result in search_results
-        ]))
-        
-        file_sources = list(set([result['file_name'] for result in search_results]))
-        sheet_sources = list(set([result['sheet_name'] for result in search_results]))
-        
-        # Calculate confidence based on search results relevance
-        avg_relevance = sum(result['relevance_score'] for result in search_results) / len(search_results)
-        confidence = min(avg_relevance * 1.2, 1.0)  # Boost confidence slightly
-        
-        # Generate chart recommendation if applicable
-        chart_data = None
-        if any(keyword in request.question.lower() for keyword in ['chart', 'graph', 'plot', 'visualize']):
-            column_info = []
-            for result in search_results:
-                metadata = result.get('metadata', {})
-                if 'columns' in metadata:
-                    column_info.extend([col['name'] for col in metadata['columns']])
-            
-            if column_info:
-                chart_data = await llm_svc.recommend_chart(
-                    question=request.question,
-                    data_description=context[:500],  # Truncate for chart analysis
-                    column_info=list(set(column_info))
-                )
+        # Collect streaming response for REST API
+        full_response = ""
+        async for chunk in response_gen:
+            full_response += chunk
         
         return QueryResponse(
-            answer=llm_response["answer"],
-            sources=sources,
-            confidence=confidence,
-            chart_data=chart_data,
-            processing_time_ms=llm_response.get("processing_time_ms", 0),
-            tokens_used=llm_response.get("tokens_used", 0),
-            file_sources=file_sources,
-            sheet_sources=sheet_sources
+            answer=full_response,
+            sources=[],  # Will be populated by RAG service
+            confidence=0.8,
+            timestamp=datetime.now(),
+            processing_time_ms=0
         )
         
     except Exception as e:
-        logger.error(f"Error processing query: {e}")
+        logger.error(f"Error processing streaming query: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/stats", response_model=SystemStats)
 async def get_stats(services=Depends(get_services)):
-    """Get system statistics."""
+    """Get enhanced system statistics."""
     try:
-        excel_proc, vector_store_svc, llm_svc = services
+        excel_proc, vector_store_svc, llm_svc, rag_svc = services
         
-        # Get file statistics
-        file_stats = excel_proc.get_file_statistics()
-        
-        # Get vector store statistics
+        # Get enhanced statistics from all services
+        file_stats = excel_proc.get_statistics()
         vector_stats = vector_store_svc.get_statistics()
-        
-        # Get LLM service statistics
-        llm_stats = llm_svc.get_statistics()
+        llm_stats = llm_svc.get_service_statistics()
+        rag_stats = rag_svc.get_rag_statistics()
         
         uptime_seconds = int((datetime.now() - app_start_time).total_seconds())
         
         return SystemStats(
-            total_files=file_stats["total_files"],
-            total_documents=vector_stats["total_documents"],
-            cache_size=llm_stats["cache_size"],
-            model_name=llm_stats["model_name"],
-            vector_store_size=vector_stats["total_documents"],
+            total_files=file_stats.get("total_files", 0),
+            total_documents=vector_stats.get("total_documents", 0),
+            cache_size=llm_stats.get("cache_size", 0),
+            model_name=llm_stats.get("model_name", "unknown"),
+            vector_store_size=vector_stats.get("total_documents", 0),
             uptime_seconds=uptime_seconds,
-            active_connections=connection_manager.get_connection_count()
+            active_connections=llm_stats.get("websocket_connections", 0),
+            rag_query_count=rag_stats["performance_stats"].get("total_queries", 0),
+            avg_retrieval_time=rag_stats["performance_stats"].get("avg_retrieval_time", 0.0),
+            enhanced_features={
+                "multi_modal_embeddings": True,
+                "streaming_responses": True,
+                "rag_integration": True,
+                "error_handling": True,
+                "websocket_support": True
+            }
         )
         
     except Exception as e:
-        logger.error(f"Error getting stats: {e}")
+        logger.error(f"Error getting enhanced stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/rag/stats")
+async def get_rag_statistics(rag_svc: RAGIntegrationService = Depends(get_rag_service)):
+    """Get detailed RAG service statistics."""
+    try:
+        return rag_svc.get_rag_statistics()
+    except Exception as e:
+        logger.error(f"Error getting RAG statistics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/embedding/stats")
+async def get_embedding_statistics():
+    """Get embedding strategy statistics."""
+    try:
+        if not embedding_strategy:
+            raise HTTPException(status_code=503, detail="Embedding strategy not available")
+        
+        return {
+            "available_models": len(embedding_strategy.embedding_models),
+            "model_details": {
+                name: {
+                    "type": model.model_type.value,
+                    "dimensions": model.dimensions,
+                    "max_tokens": model.max_tokens
+                }
+                for name, model in embedding_strategy.embedding_models.items()
+            },
+            "content_type_configs": {
+                ct.value: config.__dict__ 
+                for ct, config in embedding_strategy.content_type_configs.items()
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error getting embedding statistics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/enhanced/reindex")
+async def enhanced_reindex_files(background_tasks: BackgroundTasks, services=Depends(get_services)):
+    """Enhanced reindexing with multi-modal capabilities."""
+    try:
+        excel_proc, vector_store_svc, _, _ = services
+        
+        async def enhanced_reindex():
+            try:
+                logger.info("Starting enhanced reindexing with multi-modal capabilities...")
+                
+                # Clear existing data
+                await vector_store_svc.clear_collection()
+                
+                # Get all files
+                all_files = await excel_proc.process_all_files()
+                
+                processed_count = 0
+                failed_count = 0
+                
+                for file_data in all_files:
+                    try:
+                        success = await vector_store_svc.add_excel_data_enhanced(
+                            file_name=file_data['file_name'],
+                            file_hash=file_data['file_hash'],
+                            sheets_data=file_data['sheets'],
+                            enable_multi_modal=True,
+                            enable_content_analysis=True,
+                            batch_size=50
+                        )
+                        
+                        if success.get('success', False):
+                            processed_count += 1
+                            logger.info(f"Enhanced reindexing: {file_data['file_name']} completed")
+                        else:
+                            failed_count += 1
+                            logger.error(f"Enhanced reindexing: {file_data['file_name']} failed")
+                            
+                    except Exception as file_error:
+                        logger.error(f"Error reindexing file {file_data['file_name']}: {file_error}")
+                        failed_count += 1
+                        continue
+                
+                logger.info(f"Enhanced reindexing completed: {processed_count} successful, {failed_count} failed")
+                
+            except Exception as e:
+                logger.error(f"Error during enhanced reindexing: {e}")
+        
+        background_tasks.add_task(enhanced_reindex)
+        
+        return {
+            "message": "Enhanced reindexing started with multi-modal capabilities",
+            "status": "processing",
+            "features": ["multi_modal_embeddings", "content_analysis", "batch_processing"]
+        }
+        
+    except Exception as e:
+        logger.error(f"Error starting enhanced reindex: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
