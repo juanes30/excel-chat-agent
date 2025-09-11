@@ -49,7 +49,14 @@ class TestExcelProcessor:
     def excel_processor(self):
         """Create Excel processor instance."""
         with tempfile.TemporaryDirectory() as temp_dir:
-            processor = ExcelProcessor(temp_dir)
+            processor = ExcelProcessor(temp_dir, analysis_mode="basic")
+            yield processor
+    
+    @pytest.fixture
+    def excel_processor_comprehensive(self):
+        """Create Excel processor instance with comprehensive analysis."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            processor = ExcelProcessor(temp_dir, analysis_mode="comprehensive")
             yield processor
     
     def test_excel_file_validation(self, excel_processor, temp_excel_file):
@@ -108,6 +115,24 @@ class TestExcelProcessor:
         assert 'IT' in all_text
         assert '50000' in all_text
         assert 'Employees' in all_text
+    
+    def test_analysis_modes(self, temp_excel_file):
+        """Test different analysis modes."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Test basic mode
+            basic_proc = ExcelProcessor(temp_dir, analysis_mode="basic")
+            basic_result = basic_proc.process_excel_file(temp_excel_file)
+            assert basic_result['analysis_mode'] == 'basic'
+            
+            # Test comprehensive mode
+            comp_proc = ExcelProcessor(temp_dir, analysis_mode="comprehensive")
+            comp_result = comp_proc.process_excel_file(temp_excel_file)
+            assert comp_result['analysis_mode'] == 'comprehensive'
+            
+            # Test auto mode
+            auto_proc = ExcelProcessor(temp_dir, analysis_mode="auto")
+            auto_result = auto_proc.process_excel_file(temp_excel_file)
+            assert auto_result['analysis_mode'] in ['basic', 'moderate', 'comprehensive']
 
 
 class TestAPI:
