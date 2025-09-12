@@ -18,6 +18,7 @@ import statistics
 import numpy as np
 import pandas as pd
 from sentence_transformers import SentenceTransformer
+from .shared_embedding_service import embedding_service
 import torch
 
 logger = logging.getLogger(__name__)
@@ -277,7 +278,7 @@ class TextualEmbedder:
     
     def __init__(self, config: EmbeddingConfig):
         self.config = config
-        self.model = SentenceTransformer(config.primary_model.value)
+        self.model = embedding_service.get_model(config.primary_model.value)
         self.business_terms = self._load_business_terms()
         self.cache = {}
     
