@@ -502,13 +502,13 @@ Be specific and reference the data sources."""
     async def process_rag_enhanced_query(self, 
                                        query_request: QueryRequest,
                                        session_id: Optional[str] = None,
-                                       streaming_mode: StreamingMode = StreamingMode.TOKEN_BY_TOKEN) -> Union[QueryResponse, AsyncGenerator[str, None]]:
+                                       ) -> Union[QueryResponse, AsyncGenerator[str, None]]:
         """Process query with full RAG enhancement.
         
         Args:
             query_request: Original query request
             session_id: Session identifier for conversation context
-            streaming_mode: Streaming mode for response
+
             
         Returns:
             Enhanced query response or streaming generator
