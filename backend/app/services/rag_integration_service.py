@@ -639,8 +639,18 @@ Be specific and reference the data sources."""
             
             # Fallback to basic LLM service
             try:
-                fallback_response = await self.llm_service.generate_enhanced_response(
-                    query_request, session_id, streaming_mode
+                # Use analyze_excel_query as fallback
+                fallback_result = await self.llm_service.analyze_excel_query(
+                    query_request.question, 
+                    session_id=session_id
+                )
+                
+                # Create QueryResponse compatible object
+                fallback_response = QueryResponse(
+                    answer=fallback_result.get("response", ""),
+                    sources=["Fallback - RAG unavailable"],
+                    confidence=0.3,
+                    timestamp=datetime.now()
                 )
                 
                 if isinstance(fallback_response, QueryResponse):
