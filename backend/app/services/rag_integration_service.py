@@ -583,8 +583,20 @@ Be specific and reference the data sources."""
             
             else:
                 # Standard response
-                response = await self.llm_service.generate_enhanced_response(
-                    enhanced_request, session_id
+                # Use analyze_excel_query for non-streaming response with enhanced context
+                response_result = await self.llm_service.analyze_excel_query(
+                    contextualized_prompt.prompt, 
+                    excel_context=None,  # Context already included in prompt
+                    session_id=session_id
+                )
+                
+                # Create QueryResponse compatible object
+                response = QueryResponse(
+                    answer=response_result.get("response", ""),
+                    sources=contextualized_prompt.source_attribution[:5],
+                    confidence=contextualized_prompt.confidence_level,
+                    processing_time_ms=int(total_time),
+                    timestamp=datetime.now()
                 )
                 
                 generation_time = (time.time() - generation_start) * 1000
