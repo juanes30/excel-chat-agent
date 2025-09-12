@@ -555,8 +555,10 @@ Be specific and reference the data sources."""
             
             if query_request.streaming and session_id:
                 # Streaming response
-                response_gen = await self.llm_service.generate_enhanced_response(
-                    enhanced_request, session_id, streaming_mode
+                # Use analyze_excel_query for streaming response with enhanced context
+                response_gen = await self.llm_service.generate_streaming_response(
+                    [HumanMessage(content=contextualized_prompt.prompt)], 
+                    session_id
                 )
                 
                 # Wrap generator to add RAG metadata
