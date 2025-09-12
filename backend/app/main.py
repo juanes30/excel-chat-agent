@@ -221,7 +221,7 @@ async def initialize_services():
         # Process existing Excel files and index them with enhanced processing
         try:
             logger.info("Processing existing Excel files with enhanced processor...")
-            all_files = await excel_processor.process_all_files()
+            all_files = excel_processor.process_all_files()
             
             processed_count = 0
             for file_data in all_files:
@@ -642,7 +642,7 @@ async def enhanced_reindex_files(background_tasks: BackgroundTasks, services=Dep
                 await vector_store_svc.clear_collection()
                 
                 # Get all files
-                all_files = await excel_proc.process_all_files()
+                all_files = excel_proc.process_all_files()
                 
                 processed_count = 0
                 failed_count = 0
