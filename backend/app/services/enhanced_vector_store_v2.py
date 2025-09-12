@@ -616,7 +616,7 @@ class EnhancedVectorStoreV2(AdvancedVectorStoreService):
             try:
                 # Test enhanced embedding generation if available
                 if hasattr(self, 'enhanced_embedding'):
-                    test_result = await self._generate_enhanced_embeddings([{"content": "test", "type": "text"}])
+                    test_result = await self._generate_enhanced_embeddings(["test health check content"])
                     enhanced_checks["enhanced_embeddings_working"] = len(test_result) > 0
                 else:
                     enhanced_checks["enhanced_embeddings_working"] = False
