@@ -373,8 +373,9 @@ async def health_check():
         if rag_service:
             try:
                 rag_health = await rag_service.health_check()
-                components["rag_integration_service"] = rag_health.get("status", "healthy")
-                if rag_health.get("status") not in ["healthy", "degraded"]:
+                rag_status = rag_health.get("rag_service", "healthy")
+                components["rag_integration_service"] = rag_status
+                if rag_status not in ["healthy", "degraded"]:
                     overall_status = "degraded"
             except Exception as e:
                 components["rag_integration_service"] = "unhealthy"
