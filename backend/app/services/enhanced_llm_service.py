@@ -9,8 +9,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Union
 
 from langchain.callbacks.base import BaseCallbackHandler
 from langchain.schema import BaseMessage, HumanMessage, AIMessage, SystemMessage
-from langchain_community.chat_models import ChatOllama
-from langchain_community.llms import Ollama
+from langchain_ollama import ChatOllama
 from langchain.memory import ConversationBufferWindowMemory
 from langchain.prompts import PromptTemplate, ChatPromptTemplate
 from langchain.schema.output_parser import OutputParserException

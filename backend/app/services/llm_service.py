@@ -8,9 +8,9 @@ from datetime import datetime, timedelta
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from langchain.callbacks.base import BaseCallbackHandler
-from langchain.schema import BaseMessage, HumanMessage, AIMessage, SystemMessage
-from langchain_community.chat_models import ChatOllama
-from langchain_community.llms import Ollama
+# Imports moved to langchain_core
+from langchain_ollama import ChatOllama
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langchain.memory import ConversationBufferWindowMemory
 from langchain.prompts import PromptTemplate, ChatPromptTemplate
 from langchain.schema.output_parser import OutputParserException
