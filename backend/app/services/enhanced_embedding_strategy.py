@@ -561,6 +561,17 @@ class EnhancedEmbeddingStrategy:
         self.textual_embedder = TextualEmbedder(self.config)
         self.hierarchical_embedder = HierarchicalEmbedder(self.config)
         
+        # Add embedding_models attribute for health check compatibility
+        self.embedding_models = {
+            "primary_model": self.config.primary_model.value,
+            "numerical_embedder": "numerical",
+            "textual_embedder": self.config.primary_model.value,
+            "hierarchical_embedder": "hierarchical"
+        }
+        
+        # Add singular embedding_model attribute (health check looks for this)
+        self.embedding_model = self.config.primary_model.value
+        
         # Caching
         self.embedding_cache = {}
         self.analysis_cache = {}
@@ -746,7 +757,7 @@ class EnhancedEmbeddingStrategy:
         import re
         
         # Find all numbers (including decimals, percentages, currencies)
-        number_pattern = r'-?\d+(?:\.\d+)?[%$¬£¥]?'
+        number_pattern = r'-?\d+(?:\.\d+)?[%$â‚¬Â£Â¥]?'
         numbers = re.findall(number_pattern, content)
         
         # Calculate ratio

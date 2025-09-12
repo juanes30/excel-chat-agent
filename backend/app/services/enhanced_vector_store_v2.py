@@ -592,6 +592,62 @@ class EnhancedVectorStoreV2(AdvancedVectorStoreService):
             enhanced_stats["content_type_distribution"] = {}
         
         return enhanced_stats
+
+    async def health_check(self) -> Dict[str, Any]:
+        """Check the health of the enhanced vector store service.
+        
+        Returns:
+            Dictionary with enhanced health status
+        """
+        try:
+            # Get base health check from parent class
+            base_health = super().health_check() if hasattr(super(), 'health_check') else {}
+            
+            # Enhanced health checks
+            enhanced_checks = {
+                "enhanced_features_available": True,
+                "multi_modal_enabled": getattr(self, 'enable_multi_modal', False),
+                "embedding_strategy_loaded": hasattr(self, 'enhanced_embedding'),
+                "cache_accessible": len(getattr(self, 'content_analysis_cache', {})) >= 0,
+                "embedding_strategy_cache_accessible": len(getattr(self, 'embedding_strategy_cache', {})) >= 0
+            }
+            
+            # Test enhanced functionality
+            try:
+                # Test enhanced embedding generation if available
+                if hasattr(self, 'enhanced_embedding'):
+                    test_result = await self._generate_enhanced_embeddings([{"content": "test", "type": "text"}])
+                    enhanced_checks["enhanced_embeddings_working"] = len(test_result) > 0
+                else:
+                    enhanced_checks["enhanced_embeddings_working"] = False
+            except Exception as e:
+                logger.warning(f"Enhanced embedding test failed: {e}")
+                enhanced_checks["enhanced_embeddings_working"] = False
+            
+            # Determine overall status
+            all_checks_passed = all([
+                base_health.get("status", "unhealthy") == "healthy",
+                enhanced_checks.get("enhanced_features_available", False),
+                enhanced_checks.get("embedding_strategy_loaded", False)
+            ])
+            
+            status = "healthy" if all_checks_passed else "degraded"
+            
+            return {
+                "status": status,
+                **base_health,
+                **enhanced_checks,
+                "service_type": "enhanced_vector_store_v2"
+            }
+            
+        except Exception as e:
+            logger.error(f"Enhanced vector store health check failed: {e}")
+            return {
+                "status": "unhealthy",
+                "error": str(e),
+                "service_type": "enhanced_vector_store_v2",
+                "enhanced_features_available": False
+            }
     
     def clear_enhanced_caches(self):
         """Clear all enhanced caches."""
