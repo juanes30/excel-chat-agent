@@ -86,12 +86,12 @@ class LangChainLLMService:
             verbose=True
         )
         
-        # Conversation memory with window
-        self.memory = ConversationBufferWindowMemory(
-            k=10,  # Keep last 10 exchanges
-            return_messages=True,
-            memory_key="chat_history"
-        )
+        # Conversation memory with window (LangChain 0.3+ compatible)
+        from langchain_core.chat_history import InMemoryChatMessageHistory
+        
+        # Use modern chat history directly (no deprecated memory wrapper)
+        self.chat_history = InMemoryChatMessageHistory()
+        self.max_history_length = 20  # Keep last 20 messages (10 exchanges)
         
         # Response cache with TTL
         self._response_cache = {}
@@ -101,6 +101,20 @@ class LangChainLLMService:
         self._setup_prompt_templates()
         
         logger.info(f"Initialized LangChain LLM Service with model: {model_name}")
+
+    def _trim_chat_history(self):
+        """Trim chat history to maintain memory window size."""
+        if len(self.chat_history.messages) > self.max_history_length:
+            # Remove oldest messages, keeping pairs of user/assistant messages
+            messages_to_remove = len(self.chat_history.messages) - self.max_history_length
+            # Ensure we remove even number to maintain user/assistant pairs
+            if messages_to_remove % 2 == 1:
+                messages_to_remove += 1
+            
+            # Remove oldest messages
+            for _ in range(messages_to_remove):
+                if self.chat_history.messages:
+                    self.chat_history.messages.pop(0)
 
     def _setup_prompt_templates(self):
         """Set up various prompt templates for different use cases."""
@@ -289,8 +303,9 @@ class LangChainLLMService:
                 self._cache_response(cache_key, answer)
             
             # Add to conversation memory
-            self.memory.chat_memory.add_user_message(question)
-            self.memory.chat_memory.add_ai_message(answer)
+            self.chat_history.add_user_message(question)
+            self.chat_history.add_ai_message(answer)
+            self._trim_chat_history()
             
             processing_time = int((time.time() - start_time) * 1000)
             
@@ -352,8 +367,9 @@ class LangChainLLMService:
             
             # Add to conversation memory after streaming is complete
             if response_text:
-                self.memory.chat_memory.add_user_message(question)
-                self.memory.chat_memory.add_ai_message(response_text)
+                self.chat_history.add_user_message(question)
+                self.chat_history.add_ai_message(response_text)
+                self._trim_chat_history()
             
         except Exception as e:
             logger.error(f"Error in streaming response: {e}")
@@ -496,7 +512,7 @@ class LangChainLLMService:
             List of conversation messages
         """
         try:
-            messages = self.memory.chat_memory.messages[-limit*2:]  # *2 because of user/ai pairs
+            messages = self.chat_history.messages[-limit*2:]  # *2 because of user/ai pairs
             
             formatted_messages = []
             for i, message in enumerate(messages):
@@ -524,7 +540,7 @@ class LangChainLLMService:
 
     def clear_conversation_history(self):
         """Clear the conversation memory."""
-        self.memory.clear()
+        self.chat_history.clear()
         logger.info("Cleared conversation history")
 
     def health_check(self) -> Dict[str, Any]:
@@ -545,7 +561,7 @@ class LangChainLLMService:
                 "ollama_url": self.ollama_url,
                 "response_time_ms": response_time,
                 "cache_size": len(self._response_cache),
-                "conversation_length": len(self.memory.chat_memory.messages)
+                "conversation_length": len(self.chat_history.messages)
             }
             
         except Exception as e:
@@ -572,6 +588,6 @@ class LangChainLLMService:
             "max_tokens": self.max_tokens,
             "cache_size": len(self._response_cache),
             "cache_ttl_minutes": int(self._cache_ttl.total_seconds() / 60),
-            "memory_window_size": self.memory.k,
-            "conversation_length": len(self.memory.chat_memory.messages)
+            "memory_window_size": self.max_history_length,
+            "conversation_length": len(self.chat_history.messages)
         }
