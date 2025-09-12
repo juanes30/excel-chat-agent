@@ -4,11 +4,12 @@ import asyncio
 import logging
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, AsyncGenerator
 from dataclasses import dataclass
 from enum import Enum
 
 from app.services.enhanced_llm_service import EnhancedLLMService
+from langchain.schema import HumanMessage
 from app.services.enhanced_vector_store_v2 import EnhancedVectorStoreV2, MultiModalSearchResult
 from app.services.enhanced_embedding_strategy import ContentType, EmbeddingModel
 from app.models.schemas import QueryRequest, QueryResponse, ChartData
