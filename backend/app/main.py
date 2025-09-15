@@ -913,18 +913,21 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                             for result in search_results
                         ])
                         
-                        # Stream response
+                        # Optimized streaming response with adaptive batching
                         response_text = ""
-                        async for token in llm_service.generate_streaming_response(
+                        token_generator = llm_service.generate_streaming_response(
                             question=content,
                             context=context
-                        ):
-                            response_text += token
-                            await connection_manager.send_json_message({
-                                "type": "token",
-                                "content": token,
-                                "timestamp": datetime.now().isoformat()
-                            }, session_id)
+                        )
+                        
+                        # Use optimized streaming with batching and caching
+                        async def token_collector():
+                            async for token in token_generator:
+                                nonlocal response_text
+                                response_text += token
+                                yield token
+                        
+                        await connection_manager.send_streaming_tokens(session_id, token_collector())
                         
                         # Send completion message
                         sources = list(set([
@@ -938,7 +941,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                                 "sources": sources,
                                 "total_tokens": len(response_text.split())
                             },
-                            "timestamp": datetime.now().isoformat()
+                            "timestamp": connection_manager._get_cached_timestamp()
                         }, session_id)
                     
                     else:
