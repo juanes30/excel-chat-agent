@@ -4,7 +4,9 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from datetime import datetime, timedelta
+from enum import Enum
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Union
 
 from langchain.callbacks.base import BaseCallbackHandler
@@ -19,6 +21,59 @@ from app.models.schemas import ChartType, ChartData
 from app.services.llm_service import LangChainLLMService
 
 logger = logging.getLogger(__name__)
+
+
+class StreamingMode(Enum):
+    """Enumeration for different streaming modes."""
+    TOKEN_BY_TOKEN = "token_by_token"
+    SENTENCE_BY_SENTENCE = "sentence_by_sentence"
+    PARAGRAPH_BY_PARAGRAPH = "paragraph_by_paragraph"
+
+
+class WebSocketManager:
+    """Manager for WebSocket connections and streaming."""
+    
+    def __init__(self):
+        self.connections: Dict[str, Any] = {}
+        self.session_data: Dict[str, Dict[str, Any]] = {}
+    
+    async def register_connection(self, websocket, session_id: str):
+        """Register a WebSocket connection."""
+        self.connections[session_id] = websocket
+        self.session_data[session_id] = {
+            "connected_at": datetime.now(),
+            "last_activity": datetime.now(),
+            "streaming_mode": StreamingMode.TOKEN_BY_TOKEN
+        }
+        logger.info(f"WebSocket connection registered: {session_id}")
+    
+    async def unregister_connection(self, session_id: str):
+        """Unregister a WebSocket connection."""
+        if session_id in self.connections:
+            del self.connections[session_id]
+        if session_id in self.session_data:
+            del self.session_data[session_id]
+        logger.info(f"WebSocket connection unregistered: {session_id}")
+    
+    async def send_to_session(self, session_id: str, message: Dict[str, Any]):
+        """Send message to a specific session."""
+        if session_id in self.connections:
+            try:
+                websocket = self.connections[session_id]
+                await websocket.send_text(json.dumps(message, default=str))
+                # Update last activity
+                if session_id in self.session_data:
+                    self.session_data[session_id]["last_activity"] = datetime.now()
+                return True
+            except Exception as e:
+                logger.error(f"Error sending message to session {session_id}: {e}")
+                await self.unregister_connection(session_id)
+                return False
+        return False
+    
+    def get_session_count(self) -> int:
+        """Get the number of active sessions."""
+        return len(self.connections)
 
 
 class EnhancedStreamingCallback(BaseCallbackHandler):
@@ -78,6 +133,7 @@ class EnhancedLLMService(LangChainLLMService):
         self.enable_streaming = enable_streaming
         self.streaming_callback = EnhancedStreamingCallback()
         self.conversation_history = {}
+        self.websocket_manager = WebSocketManager()
         self.performance_metrics = {
             "total_requests": 0,
             "total_tokens": 0,
