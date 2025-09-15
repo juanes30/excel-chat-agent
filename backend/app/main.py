@@ -325,8 +325,16 @@ async def initialize_services():
             rag_service = None
             logger.info("RAG integration service not available (fallback mode)")
         
-        # WebSocket handler not available, skip initialization
-        logger.info("WebSocket handlers not available (fallback mode)")
+        # Initialize Enhanced WebSocket handlers if available
+        if HAS_ENHANCED_WEBSOCKET:
+            try:
+                initialize_websocket_handler(llm_service)
+                logger.info("Enhanced WebSocket handlers initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize enhanced WebSocket handlers: {e}")
+                logger.info("WebSocket handlers not available (fallback mode)")
+        else:
+            logger.info("Enhanced WebSocket handlers not available (fallback mode)")
         
         # Process existing Excel files and index them with enhanced processing
         try:
