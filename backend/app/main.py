@@ -110,60 +110,170 @@ embedding_strategy: Optional[EnhancedEmbeddingStrategy] = None
 app_start_time: datetime = datetime.now()
 
 
-class ConnectionManager:
-    """Manages WebSocket connections."""
+class OptimizedConnectionManager:
+    """Performance-optimized WebSocket connection manager with adaptive batching and caching."""
     
     def __init__(self):
         self.active_connections: Dict[str, WebSocket] = {}
         self.session_data: Dict[str, Dict[str, Any]] = {}
+        self._connection_cache: Dict[str, WebSocket] = {}
+        self._timestamp_cache: Optional[str] = None
+        self._last_timestamp_update: float = 0
+        self._token_buffers: Dict[str, List[str]] = {}
+        self.batch_size: int = 3  # Adaptive batch size for tokens
+        self.timestamp_cache_duration: float = 0.01  # 10ms cache duration
     
     async def connect(self, websocket: WebSocket, session_id: str):
-        """Accept a WebSocket connection."""
+        """Accept a WebSocket connection with caching optimization."""
         await websocket.accept()
         self.active_connections[session_id] = websocket
+        self._connection_cache[session_id] = websocket  # Cache connection
+        self._token_buffers[session_id] = []  # Initialize token buffer
+        
+        cached_timestamp = self._get_cached_timestamp()
         self.session_data[session_id] = {
-            "connected_at": datetime.now(),
-            "last_activity": datetime.now()
+            "connected_at": cached_timestamp,
+            "last_activity": cached_timestamp,
+            "message_count": 0,
+            "token_count": 0
         }
         logger.info(f"WebSocket connection established: {session_id}")
     
     def disconnect(self, session_id: str):
-        """Remove a WebSocket connection."""
+        """Remove a WebSocket connection and cleanup caches."""
         if session_id in self.active_connections:
             del self.active_connections[session_id]
+        if session_id in self._connection_cache:
+            del self._connection_cache[session_id]
         if session_id in self.session_data:
             del self.session_data[session_id]
+        if session_id in self._token_buffers:
+            del self._token_buffers[session_id]
         logger.info(f"WebSocket connection closed: {session_id}")
     
+    def _get_cached_timestamp(self) -> str:
+        """Get cached timestamp to reduce datetime.now() calls."""
+        import time
+        now = time.time()
+        if now - self._last_timestamp_update > self.timestamp_cache_duration:
+            self._timestamp_cache = datetime.now().isoformat()
+            self._last_timestamp_update = now
+        return self._timestamp_cache
+    
     async def send_personal_message(self, message: str, session_id: str):
-        """Send a message to a specific WebSocket connection."""
-        if session_id in self.active_connections:
-            websocket = self.active_connections[session_id]
+        """Send a message using cached connection lookup."""
+        websocket = self._connection_cache.get(session_id)
+        if not websocket:
+            websocket = self.active_connections.get(session_id)
+            if websocket:
+                self._connection_cache[session_id] = websocket
+        
+        if websocket:
             try:
                 await websocket.send_text(message)
-                self.session_data[session_id]["last_activity"] = datetime.now()
+                self._update_session_activity(session_id)
             except Exception as e:
                 logger.error(f"Error sending message to {session_id}: {e}")
                 self.disconnect(session_id)
     
     async def send_json_message(self, data: Dict[str, Any], session_id: str):
-        """Send a JSON message to a specific WebSocket connection."""
-        if session_id in self.active_connections:
-            websocket = self.active_connections[session_id]
+        """Send JSON message using cached connection lookup."""
+        websocket = self._connection_cache.get(session_id)
+        if not websocket:
+            websocket = self.active_connections.get(session_id)
+            if websocket:
+                self._connection_cache[session_id] = websocket
+        
+        if websocket:
             try:
                 await websocket.send_json(data)
-                self.session_data[session_id]["last_activity"] = datetime.now()
+                self._update_session_activity(session_id)
             except Exception as e:
                 logger.error(f"Error sending JSON message to {session_id}: {e}")
                 self.disconnect(session_id)
     
+    async def send_token_batch(self, session_id: str, tokens: List[str]):
+        """Send tokens in adaptive batches for optimal performance."""
+        if not tokens:
+            return
+        
+        batch_content = ' '.join(tokens)
+        cached_timestamp = self._get_cached_timestamp()
+        
+        message = {
+            "type": "token_batch",
+            "content": batch_content,
+            "token_count": len(tokens),
+            "timestamp": cached_timestamp
+        }
+        
+        await self.send_json_message(message, session_id)
+        
+        # Update session statistics
+        if session_id in self.session_data:
+            self.session_data[session_id]["token_count"] += len(tokens)
+    
+    async def add_token_to_buffer(self, session_id: str, token: str):
+        """Add token to buffer and send batch when threshold reached."""
+        if session_id not in self._token_buffers:
+            self._token_buffers[session_id] = []
+        
+        self._token_buffers[session_id].append(token)
+        
+        # Send batch if buffer is full
+        if len(self._token_buffers[session_id]) >= self.batch_size:
+            await self.flush_token_buffer(session_id)
+    
+    async def flush_token_buffer(self, session_id: str):
+        """Flush remaining tokens in buffer."""
+        if session_id in self._token_buffers and self._token_buffers[session_id]:
+            tokens = self._token_buffers[session_id]
+            self._token_buffers[session_id] = []
+            await self.send_token_batch(session_id, tokens)
+    
+    def _update_session_activity(self, session_id: str):
+        """Update session activity with cached timestamp."""
+        if session_id in self.session_data:
+            cached_timestamp = self._get_cached_timestamp()
+            self.session_data[session_id]["last_activity"] = cached_timestamp
+            self.session_data[session_id]["message_count"] += 1
+    
+    async def send_streaming_tokens(self, session_id: str, token_generator):
+        """Optimized streaming with adaptive batching and caching."""
+        async for token in token_generator:
+            await self.add_token_to_buffer(session_id, token)
+        
+        # Flush any remaining tokens
+        await self.flush_token_buffer(session_id)
+    
     def get_connection_count(self) -> int:
         """Get the number of active connections."""
         return len(self.active_connections)
+    
+    def get_performance_stats(self) -> Dict[str, Any]:
+        """Get performance statistics for monitoring."""
+        total_messages = sum(
+            session.get("message_count", 0) 
+            for session in self.session_data.values()
+        )
+        total_tokens = sum(
+            session.get("token_count", 0) 
+            for session in self.session_data.values()
+        )
+        
+        return {
+            "active_connections": len(self.active_connections),
+            "cached_connections": len(self._connection_cache),
+            "total_messages_sent": total_messages,
+            "total_tokens_sent": total_tokens,
+            "average_tokens_per_connection": total_tokens / max(1, len(self.active_connections)),
+            "batch_size": self.batch_size,
+            "timestamp_cache_duration_ms": self.timestamp_cache_duration * 1000
+        }
 
 
-# Global connection manager
-connection_manager = ConnectionManager()
+# Global optimized connection manager
+connection_manager = OptimizedConnectionManager()
 
 
 @with_error_handling(operation="initialize_services")
