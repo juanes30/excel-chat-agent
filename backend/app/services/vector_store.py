@@ -11,6 +11,7 @@ import chromadb
 import numpy as np
 from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
+from .shared_embedding_service import embedding_service
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +46,9 @@ class VectorStoreService:
             )
         )
         
-        # Initialize embedding model
-        logger.info(f"Loading embedding model: {embedding_model}")
-        self.embedding_model = SentenceTransformer(embedding_model)
+        # Initialize embedding model using shared service
+        logger.info(f"Using shared embedding model: {embedding_model}")
+        self.embedding_model = embedding_service.get_model(embedding_model)
         
         # Get or create collection
         try:
@@ -93,11 +94,12 @@ class VectorStoreService:
         # Generate embeddings for uncached texts
         if uncached_texts:
             logger.debug(f"Generating embeddings for {len(uncached_texts)} texts")
-            new_embeddings = self.embedding_model.encode(
+            new_embeddings = embedding_service.encode(
                 uncached_texts,
+                model_name=self.embedding_model_name,
                 convert_to_numpy=True,
                 show_progress_bar=len(uncached_texts) > 10
-            ).tolist()
+            )
             
             # Cache new embeddings
             for text, embedding in zip(uncached_texts, new_embeddings):

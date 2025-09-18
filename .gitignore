@@ -382,3 +382,5 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
+chroma_db/chroma.sqlite3
+backend/chroma_db/chroma.sqlite3

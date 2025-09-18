@@ -53,6 +53,79 @@ class EnhancedExcelProcessor:
         )
         self.currency_pattern = re.compile(r"[$€£¥]\s*\d+(?:[,.]?\d+)*|\d+(?:[,.]?\d+)*\s*[$€£¥]")
 
+    def process_all_files(self) -> List[Dict[str, Any]]:
+        """Process all Excel files in the data directory with enhanced capabilities.
+        
+        Returns:
+            List of processed file data with additional enhanced metadata
+        """
+        results = []
+        
+        # Find all Excel files
+        excel_files = []
+        for ext in self.supported_extensions:
+            excel_files.extend(self.data_directory.glob(f"*{ext}"))
+        
+        logger.info(f"Found {len(excel_files)} Excel files to process with enhanced capabilities")
+        
+        for file_path in excel_files:
+            try:
+                result = self.process_excel_file(file_path)
+                results.append(result)
+                logger.info(f"Successfully processed {file_path.name} with enhanced features")
+            except Exception as e:
+                logger.error(f"Failed to process {file_path} with enhanced processor: {e}")
+                continue
+        
+        logger.info(f"Enhanced processing completed for {len(results)}/{len(excel_files)} files")
+        return results
+
+    def get_statistics(self) -> Dict[str, Any]:
+        """Get enhanced Excel processor statistics.
+        
+        Returns:
+            Dictionary with enhanced processor statistics
+        """
+        try:
+            # Get base statistics from file processor
+            base_stats = self.get_file_statistics() if hasattr(self, 'get_file_statistics') else {}
+            
+            # Enhanced statistics
+            excel_files = []
+            for ext in self.supported_extensions:
+                excel_files.extend(self.data_directory.glob(f"*{ext}"))
+            
+            processed_files = len([f for f in excel_files if f.exists()])
+            cache_entries = len(getattr(self, '_file_cache', {}))
+            
+            enhanced_stats = {
+                "processor_type": "enhanced",
+                "total_excel_files": len(excel_files),
+                "processed_files": processed_files,
+                "cache_entries": cache_entries,
+                "cache_memory_usage_mb": getattr(self, '_cache_memory_usage', 0) / (1024 * 1024),
+                "supported_extensions": list(self.supported_extensions),
+                "max_file_size_mb": self.max_file_size_mb,
+                "parallel_processing_enabled": getattr(self, 'enable_parallel_processing', False),
+                "data_directory": str(self.data_directory)
+            }
+            
+            # Merge with base stats if available
+            if base_stats:
+                enhanced_stats.update(base_stats)
+            
+            return enhanced_stats
+            
+        except Exception as e:
+            logger.error(f"Error getting enhanced Excel processor statistics: {e}")
+            return {
+                "processor_type": "enhanced",
+                "total_excel_files": 0,
+                "processed_files": 0,
+                "cache_entries": 0,
+                "error": str(e)
+            }
+
     def get_file_hash(self, file_path: Path) -> str:
         """Generate MD5 hash for a file."""
         hash_md5 = hashlib.md5()
