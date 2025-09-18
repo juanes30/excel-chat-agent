@@ -870,35 +870,6 @@ async def test_websocket_availability():
         logger.error(f"Error testing WebSocket availability: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
-@app.get("/api/websocket/performance")
-async def get_websocket_performance():
-    """Get WebSocket performance statistics and optimization metrics."""
-        performance_stats = connection_manager.get_performance_stats()
-
-        # Add system-level performance info
-        performance_stats.update({
-            "optimization_features": {
-                "adaptive_batching": True,
-                "connection_caching": True,
-                "timestamp_caching": True,
-                "performance_monitoring": True
-            },
-            "expected_improvements": {
-                "streaming_performance": "40-60% improvement vs token-by-token",
-                "websocket_overhead": "5x reduction in message overhead",
-                "timestamp_overhead": "15-20% reduction",
-                "connection_overhead": "20-30% reduction"
-            }
-        })
-
-        return performance_stats
-
-    except Exception as e:
-        logger.error(f"Error getting WebSocket performance stats: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @app.get("/api/websocket/performance")
 async def get_websocket_performance():
     """Get WebSocket performance statistics and optimization metrics."""
