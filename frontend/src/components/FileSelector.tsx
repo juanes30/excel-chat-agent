@@ -57,13 +57,22 @@ const FileItem: React.FC<FileItemProps> = ({
     return `${sizeInMB.toFixed(1)} MB`;
   };
 
-  const formatDate = (date: Date): string => {
-    return new Intl.DateTimeFormat('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    }).format(date);
+  const formatDate = (date: Date | string): string => {
+    try {
+      const dateObj = typeof date === 'string' ? new Date(date) : date;
+      if (isNaN(dateObj.getTime())) {
+        return 'Invalid date';
+      }
+      return new Intl.DateTimeFormat('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      }).format(dateObj);
+    } catch (error) {
+      console.error('Error formatting date:', error, date);
+      return 'Invalid date';
+    }
   };
 
   return (
@@ -131,7 +140,7 @@ const FileItem: React.FC<FileItemProps> = ({
       </div>
 
       {/* Sheet Selection */}
-      {isExpanded && file.sheets.length > 0 && (
+      {isExpanded && file.sheets && file.sheets.length > 0 && (
         <div className="border-t border-gray-200 p-3 bg-gray-50">
           <div className="text-xs font-medium text-gray-700 mb-2">
             Select Sheet:
@@ -147,7 +156,7 @@ const FileItem: React.FC<FileItemProps> = ({
             >
               All Sheets
             </button>
-            {file.sheets.map((sheet) => (
+            {(file.sheets || []).map((sheet) => (
               <button
                 key={sheet}
                 onClick={() => onSheetSelect(sheet)}

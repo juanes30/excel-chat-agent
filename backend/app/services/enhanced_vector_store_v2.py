@@ -5,6 +5,7 @@ embedding capabilities specifically optimized for Excel data characteristics.
 """
 
 import asyncio
+import json
 import logging
 import time
 from typing import Any, Dict, List, Optional, Union
@@ -173,29 +174,24 @@ class EnhancedVectorStoreV2(AdvancedVectorStoreService):
                     
                     doc_id = f"{file_hash}_{sheet_name}_{i}"
                     
-                    # Enhanced metadata for multi-modal processing
+                    # Enhanced metadata for multi-modal processing - serialize complex objects to JSON strings
                     enhanced_metadata = {
-                        **base_metadata,
                         "file_name": file_name,
                         "file_hash": file_hash,
                         "sheet_name": sheet_name,
                         "chunk_index": i,
                         "added_at": datetime.now().isoformat(),
                         "chunk_type": "data" if i > 0 else "summary",
-                        "file_data": {
-                            "file_name": file_name,
-                            "file_size_mb": base_metadata.get("file_size_mb", 0),
-                            "total_sheets": len(sheets_data),
-                            "extension": ".xlsx"  # Default assumption
-                        },
-                        "sheet_data": {
-                            "sheet_name": sheet_name,
-                            "num_rows": base_metadata.get('num_rows', 0),
-                            "num_cols": base_metadata.get('num_cols', 0),
-                            "data_quality": base_metadata.get("data_quality", {}),
-                            "patterns_detected": base_metadata.get("patterns_detected", {}),
-                            "relationships": base_metadata.get("relationships", {})
-                        }
+                        # Simple metadata fields only
+                        "file_size_mb": float(base_metadata.get("file_size_mb", 0)),
+                        "total_sheets": len(sheets_data),
+                        "extension": ".xlsx",
+                        "num_rows": int(base_metadata.get('num_rows', 0)),
+                        "num_cols": int(base_metadata.get('num_cols', 0)),
+                        # Serialize complex objects to JSON strings
+                        "data_quality_json": json.dumps(base_metadata.get("data_quality", {}), default=str),
+                        "patterns_detected_json": json.dumps(base_metadata.get("patterns_detected", {}), default=str),
+                        "relationships_json": json.dumps(base_metadata.get("relationships", {}), default=str)
                     }
                     
                     documents.append(chunk)
@@ -362,15 +358,18 @@ class EnhancedVectorStoreV2(AdvancedVectorStoreService):
         """Extract numerical features from metadata."""
         features = {}
         
-        # Data quality numerical indicators
-        if "data_quality" in metadata:
-            quality_data = metadata["data_quality"]
-            features.update({
-                "completeness_score": quality_data.get("completeness_score", 0.0),
-                "consistency_score": quality_data.get("consistency_score", 0.0),
-                "validity_score": quality_data.get("validity_score", 0.0),
-                "accuracy_score": quality_data.get("accuracy_score", 0.0)
-            })
+        # Data quality numerical indicators - deserialize JSON
+        if "data_quality_json" in metadata:
+            try:
+                quality_data = json.loads(metadata["data_quality_json"])
+                features.update({
+                    "completeness_score": quality_data.get("completeness_score", 0.0),
+                    "consistency_score": quality_data.get("consistency_score", 0.0),
+                    "validity_score": quality_data.get("validity_score", 0.0),
+                    "accuracy_score": quality_data.get("accuracy_score", 0.0)
+                })
+            except (json.JSONDecodeError, TypeError):
+                pass
         
         # Statistical features if available
         if "statistics" in metadata:
@@ -392,20 +391,26 @@ class EnhancedVectorStoreV2(AdvancedVectorStoreService):
         context["file_name"] = metadata.get("file_name", "")
         context["sheet_name"] = metadata.get("sheet_name", "")
         
-        # Business patterns
-        if "patterns_detected" in metadata:
-            patterns = metadata["patterns_detected"]
-            context["has_business_patterns"] = any(
-                pattern in ["email", "phone", "currency"] 
-                for pattern in patterns.keys()
-            )
-            context["pattern_types"] = list(patterns.keys())
+        # Business patterns - deserialize JSON
+        if "patterns_detected_json" in metadata:
+            try:
+                patterns = json.loads(metadata["patterns_detected_json"])
+                context["has_business_patterns"] = any(
+                    pattern in ["email", "phone", "currency"] 
+                    for pattern in patterns.keys()
+                )
+                context["pattern_types"] = list(patterns.keys())
+            except (json.JSONDecodeError, TypeError):
+                pass
         
-        # Quality indicators for business relevance
-        if "data_quality" in metadata:
-            quality = metadata["data_quality"]
-            context["overall_quality"] = quality.get("overall_quality", "unknown")
-            context["business_relevance_score"] = quality.get("completeness_score", 0.5)
+        # Quality indicators for business relevance - deserialize JSON
+        if "data_quality_json" in metadata:
+            try:
+                quality = json.loads(metadata["data_quality_json"])
+                context["overall_quality"] = quality.get("overall_quality", "unknown")
+                context["business_relevance_score"] = quality.get("completeness_score", 0.5)
+            except (json.JSONDecodeError, TypeError):
+                pass
         
         return context if context else None
     
@@ -413,27 +418,26 @@ class EnhancedVectorStoreV2(AdvancedVectorStoreService):
         """Extract hierarchical features from metadata."""
         features = {}
         
-        # File-level hierarchy
-        if "file_data" in metadata:
-            file_data = metadata["file_data"]
-            features["file_size_mb"] = file_data.get("file_size_mb", 0.0)
-            features["total_sheets"] = float(file_data.get("total_sheets", 1))
+        # File-level hierarchy - use simple fields
+        features["file_size_mb"] = metadata.get("file_size_mb", 0.0)
+        features["total_sheets"] = float(metadata.get("total_sheets", 1))
         
-        # Sheet-level hierarchy
-        if "sheet_data" in metadata:
-            sheet_data = metadata["sheet_data"]
-            features["num_rows"] = float(sheet_data.get("num_rows", 0))
-            features["num_cols"] = float(sheet_data.get("num_cols", 0))
+        # Sheet-level hierarchy - use simple fields
+        features["num_rows"] = float(metadata.get("num_rows", 0))
+        features["num_cols"] = float(metadata.get("num_cols", 0))
         
-        # Relationship complexity
-        if "relationships" in metadata:
-            relationships = metadata["relationships"]
-            correlations = relationships.get("correlations", [])
-            features["correlation_count"] = float(len(correlations))
-            features["max_correlation"] = max(
-                [abs(corr.get("corr", 0)) for corr in correlations], 
-                default=0.0
-            )
+        # Relationship complexity - deserialize JSON
+        if "relationships_json" in metadata:
+            try:
+                relationships = json.loads(metadata["relationships_json"])
+                correlations = relationships.get("correlations", [])
+                features["correlation_count"] = float(len(correlations))
+                features["max_correlation"] = max(
+                    [abs(corr.get("corr", 0)) for corr in correlations], 
+                    default=0.0
+                )
+            except (json.JSONDecodeError, TypeError):
+                pass
         
         return features if features else None
     

@@ -289,7 +289,11 @@ async def initialize_services():
         embedding_strategy = EnhancedEmbeddingStrategy()
         
         # Initialize Enhanced Excel processor
-        data_directory = os.getenv("DATA_DIRECTORY", "data/excel_files")
+        # Use absolute path to ensure consistency
+        base_dir = Path(__file__).parent.parent  # Go up to project root
+        data_directory = os.getenv("DATA_DIRECTORY", str(base_dir / "data" / "excel_files"))
+        logger.info(f"[DEBUG-INIT] Using data directory: {data_directory}")
+        logger.info(f"[DEBUG-INIT] Absolute path: {Path(data_directory).absolute()}")
         excel_processor = ExcelProcessor(data_directory)
         logger.info(f"Enhanced Excel processor initialized with directory: {data_directory}")
         
@@ -344,11 +348,10 @@ async def initialize_services():
             processed_count = 0
             for file_data in all_files:
                 try:
-                    success = await vector_store.add_excel_data_enhanced(
+                    success = await vector_store.add_excel_data_v2(
                         file_name=file_data['file_name'],
                         file_hash=file_data['file_hash'],
                         sheets_data=file_data['sheets'],
-                        enable_multi_modal=True,
                         enable_content_analysis=True
                     )
                     if success.get('success', False):
@@ -533,10 +536,17 @@ async def list_files(services=Depends(get_services)):
     """List all processed Excel files."""
     try:
         excel_proc, _, _, _ = services
+        logger.info(f"[DEBUG-LIST] excel_proc.data_directory: {excel_proc.data_directory}")
+        logger.info(f"[DEBUG-LIST] Type: {type(excel_proc.data_directory)}")
         all_files = excel_proc.process_all_files()
         
         file_infos = []
         for file_data in all_files:
+            # Extract sheet names from the sheets data
+            sheet_names = []
+            if 'sheets' in file_data and isinstance(file_data['sheets'], dict):
+                sheet_names = list(file_data['sheets'].keys())
+            
             file_info = FileInfo(
                 file_name=file_data['file_name'],
                 file_hash=file_data['file_hash'],
@@ -545,6 +555,7 @@ async def list_files(services=Depends(get_services)):
                 total_columns=file_data['total_columns'],
                 file_size_mb=file_data['file_size_mb'],
                 last_modified=file_data['last_modified'],
+                sheets=sheet_names,  # Add sheet names
                 processed=True
             )
             file_infos.append(file_info)
@@ -574,25 +585,33 @@ async def upload_file(
             )
         
         # Save uploaded file
-        file_path = Path(excel_proc.data_directory) / file.filename
+        logger.info(f"[DEBUG-UPLOAD] excel_proc.data_directory: {excel_proc.data_directory}")
+        logger.info(f"[DEBUG-UPLOAD] Type of data_directory: {type(excel_proc.data_directory)}")
+        # Fix: data_directory is already a Path object, don't convert again
+        if isinstance(excel_proc.data_directory, Path):
+            file_path = excel_proc.data_directory / file.filename
+        else:
+            file_path = Path(excel_proc.data_directory) / file.filename
+        logger.info(f"[DEBUG-UPLOAD] Saving file to: {file_path}")
+        logger.info(f"[DEBUG-UPLOAD] Absolute path: {file_path.absolute()}")
         with open(file_path, "wb") as buffer:
             content = await file.read()
             buffer.write(content)
+        logger.info(f"[DEBUG-UPLOAD] File saved successfully: {file_path.exists()}")
         
-        # Process file in background
-        async def process_file():
-            try:
-                file_data = excel_proc.process_excel_file(file_path)
-                await vector_store_svc.add_excel_data(
-                    file_name=file_data['file_name'],
-                    file_hash=file_data['file_hash'],
-                    sheets_data=file_data['sheets']
-                )
-                logger.info(f"Successfully processed uploaded file: {file.filename}")
-            except Exception as e:
-                logger.error(f"Error processing uploaded file {file.filename}: {e}")
-        
-        background_tasks.add_task(process_file)
+        # Process file immediately (synchronously) for immediate availability
+        try:
+            file_data = excel_proc.process_excel_file_enhanced(file_path)
+            await vector_store_svc.add_excel_data_v2(
+                file_name=file_data['file_name'],
+                file_hash=file_data['file_hash'],
+                sheets_data=file_data['sheets'],
+                enable_content_analysis=True
+            )
+            logger.info(f"Successfully processed uploaded file: {file.filename}")
+        except Exception as e:
+            logger.error(f"Error processing uploaded file {file.filename}: {e}")
+            # Continue even if processing fails - file is saved
         
         return UploadResponse(
             success=True,
@@ -768,11 +787,10 @@ async def enhanced_reindex_files(background_tasks: BackgroundTasks, services=Dep
                 
                 for file_data in all_files:
                     try:
-                        success = await vector_store_svc.add_excel_data_enhanced(
+                        success = await vector_store_svc.add_excel_data_v2(
                             file_name=file_data['file_name'],
                             file_hash=file_data['file_hash'],
                             sheets_data=file_data['sheets'],
-                            enable_multi_modal=True,
                             enable_content_analysis=True,
                             batch_size=50
                         )
@@ -902,50 +920,90 @@ async def get_websocket_performance():
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
     """WebSocket endpoint for real-time chat."""
+    logger.info(f"[WS-DEBUG] New WebSocket connection attempt: {session_id}")
     # Check basic services only (enhanced services are optional)
     if not excel_processor or not vector_store:
+        logger.error(f"[WS-DEBUG] Services not available - excel_processor: {bool(excel_processor)}, vector_store: {bool(vector_store)}")
         await websocket.close(code=status.WS_1003_UNSUPPORTED_DATA)
         return
     
+    logger.info(f"[WS-DEBUG] Services available, connecting session: {session_id}")
     await connection_manager.connect(websocket, session_id)
+    logger.info(f"[WS-DEBUG] Session connected successfully: {session_id}")
     
     try:
         while True:
             # Receive message from client
+            logger.info(f"[WS-DEBUG] Waiting for message from session: {session_id}")
             data = await websocket.receive_json()
+            logger.info(f"[WS-DEBUG] Received message: {data}")
             
             message_type = data.get("type", "query")
-            content = data.get("content", "")
+            
+            # Extract content based on message type
+            if message_type == "query":
+                query_data = data.get("data", {})
+                content = query_data.get("question", "")
+                logger.info(f"[WS-DEBUG] Message type: {message_type}, question: '{content}'")
+            else:
+                content = data.get("content", "")
+                logger.info(f"[WS-DEBUG] Message type: {message_type}, content length: {len(content)}")
             
             if message_type == "query" and content:
                 try:
+                    logger.info(f"[WS-DEBUG] Processing query: '{content}'")
                     # Send acknowledgment
                     await connection_manager.send_json_message({
                         "type": "status",
                         "content": "processing",
                         "timestamp": datetime.now().isoformat()
                     }, session_id)
+                    logger.info(f"[WS-DEBUG] Sent processing acknowledgment")
                     
                     # Perform search
+                    logger.info(f"[WS-DEBUG] Starting vector search...")
+                    query_data = data.get("data", {})
                     search_results = await vector_store.search(
                         query=content,
-                        n_results=5,
-                        file_filter=data.get("file_filter"),
-                        sheet_filter=data.get("sheet_filter")
+                        n_results=query_data.get("max_results", 5),
+                        file_filter=query_data.get("file_filter"),
+                        sheet_filter=query_data.get("sheet_filter")
                     )
+                    logger.info(f"[WS-DEBUG] Search completed. Found {len(search_results) if search_results else 0} results")
                     
                     if search_results:
+                        logger.info(f"[WS-DEBUG] Building context from {len(search_results)} results")
                         context = "\n\n".join([
                             f"From {result['file_name']}, {result['sheet_name']}:\n{result['content']}"
                             for result in search_results
                         ])
+                        logger.info(f"[WS-DEBUG] Context length: {len(context)} characters")
                         
                         # Optimized streaming response with adaptive batching
+                        logger.info(f"[WS-DEBUG] Starting LLM generation...")
                         response_text = ""
-                        token_generator = llm_service.generate_streaming_response(
-                            question=content,
-                            context=context
-                        )
+                        
+                        # Check which LLM service we're using by class name
+                        service_class_name = llm_service.__class__.__name__
+                        logger.info(f"[WS-DEBUG] Detected LLM service: {service_class_name}")
+                        
+                        if service_class_name == 'LangChainLLMService':
+                            # LangChainLLMService
+                            logger.info(f"[WS-DEBUG] Using LangChainLLMService with question/context parameters")
+                            token_generator = llm_service.generate_streaming_response(
+                                question=content,
+                                context=context
+                            )
+                        else:
+                            # EnhancedLLMService - convert to messages format
+                            logger.info(f"[WS-DEBUG] Using EnhancedLLMService with messages format")
+                            from langchain.schema import HumanMessage
+                            messages = [HumanMessage(content=f"Context: {context}\n\nUser Query: {content}")]
+                            token_generator = llm_service.generate_streaming_response(
+                                messages=messages,
+                                session_id=session_id
+                            )
+                        logger.info(f"[WS-DEBUG] LLM generator created, starting streaming...")
                         
                         # Use optimized streaming with batching and caching
                         async def token_collector():
@@ -972,14 +1030,19 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         }, session_id)
                     
                     else:
+                        logger.info(f"[WS-DEBUG] No search results found, sending 'no data' response")
                         await connection_manager.send_json_message({
                             "type": "response",
                             "content": "I couldn't find any relevant data to answer your question.",
                             "timestamp": datetime.now().isoformat()
                         }, session_id)
+                        logger.info(f"[WS-DEBUG] Sent 'no data' response")
                 
                 except Exception as e:
-                    logger.error(f"Error processing WebSocket query: {e}")
+                    logger.error(f"[WS-DEBUG] ERROR processing WebSocket query: {e}")
+                    logger.error(f"[WS-DEBUG] Exception type: {type(e)}")
+                    import traceback
+                    logger.error(f"[WS-DEBUG] Traceback: {traceback.format_exc()}")
                     await connection_manager.send_json_message({
                         "type": "error",
                         "content": f"Error processing your request: {str(e)}",
@@ -987,6 +1050,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     }, session_id)
             
             elif message_type == "ping":
+                logger.info(f"[WS-DEBUG] Received ping from {session_id}")
                 # Respond to ping with pong
                 await connection_manager.send_json_message({
                     "type": "pong",

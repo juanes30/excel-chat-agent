@@ -62,6 +62,7 @@ class FileInfo(BaseModel):
     total_columns: int = Field(..., ge=0, description="Total number of unique columns")
     file_size_mb: float = Field(..., ge=0, description="File size in megabytes")
     last_modified: datetime = Field(..., description="Last modification time")
+    sheets: List[str] = Field(default_factory=list, description="List of sheet names")
     uploaded_at: Optional[datetime] = Field(default_factory=datetime.now)
     processed: bool = Field(default=False, description="Whether the file has been processed")
     

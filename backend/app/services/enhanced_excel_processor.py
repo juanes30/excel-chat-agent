@@ -61,16 +61,29 @@ class EnhancedExcelProcessor:
         """
         results = []
         
+        # DEBUG: Log directory information
+        logger.info(f"[DEBUG] Looking for files in: {self.data_directory}")
+        logger.info(f"[DEBUG] Directory exists: {self.data_directory.exists()}")
+        logger.info(f"[DEBUG] Is directory: {self.data_directory.is_dir()}")
+        logger.info(f"[DEBUG] Absolute path: {self.data_directory.absolute()}")
+        
         # Find all Excel files
         excel_files = []
         for ext in self.supported_extensions:
-            excel_files.extend(self.data_directory.glob(f"*{ext}"))
+            found = list(self.data_directory.glob(f"*{ext}"))
+            logger.info(f"[DEBUG] Found {len(found)} files with extension {ext}")
+            excel_files.extend(found)
+        
+        # DEBUG: List all files in directory
+        if self.data_directory.exists():
+            all_files = list(self.data_directory.iterdir())
+            logger.info(f"[DEBUG] All files in directory: {[f.name for f in all_files]}")
         
         logger.info(f"Found {len(excel_files)} Excel files to process with enhanced capabilities")
         
         for file_path in excel_files:
             try:
-                result = self.process_excel_file(file_path)
+                result = self.process_excel_file_enhanced(file_path)
                 results.append(result)
                 logger.info(f"Successfully processed {file_path.name} with enhanced features")
             except Exception as e:
@@ -861,6 +874,7 @@ class EnhancedExcelProcessor:
                 "interval_consistency": len(interval_counts) == 1,
                 "total_intervals": len(intervals),
                 "unique_intervals": len(interval_counts),
+                "frequency": "irregular"  # Default value, will be overridden if pattern detected
             }
 
             # Detect common patterns

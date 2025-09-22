@@ -134,7 +134,7 @@ export interface ExcelFileInfo {
   total_rows: number;
   total_columns: number;
   file_size_mb: number;
-  last_modified: Date;
+  last_modified: Date | string; // Can be either Date object or ISO string
   sheets: string[];
   lastModified?: Date;
   size?: number;
